@@ -9,12 +9,25 @@ This specification aims to describe a simple protocol for LLMs to discover and u
 Webtools expose a lightweight, HTTP‑based contract that allows consumers to
 
 * **Discover** capabilities through self‑describing metadata
-* **Validate** inputs via JSON Schema definitions
-
+* **Validate** inputs and outputs via JSON Schema definitions
   * one schema for the request object (`requestSchema`)
   * one schema for the response object (`responseSchema`)
 * **Execute** actions with optional per‑request configuration
 * **Consume** predictable, strongly‑typed responses
+* **Lock-in** specific API versions to improve security
+
+## Use Case Scenario
+
+Webtools are defined by URLs. The typical workflow follows these steps:
+
+1. **Discovery**: A user finds a webtool URL from a tool provider, marketplace, or other source
+2. **Metadata Retrieval**: The user's system issues a GET request to the URL to retrieve the webtool's metadata
+3. **Configuration**: The user fills in configuration data according to the `configSchema` defined in the metadata
+4. **Integration**: The system is now able to use the webtool with LLMs, passing the configuration and handling requests/responses
+
+### Security Considerations
+
+After reviewing the schemas and metadata, users may choose to lock-in a specific version by storing the validated metadata on their side and no longer fetching it from the remote server. This prevents potential security risks where malicious instructions could be injected into the LLM context through schema changes in newer versions of the webtool metadata.
 
 ## HTTP Methods
 
