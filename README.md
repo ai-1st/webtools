@@ -1,0 +1,220 @@
+# Webtools Interface Specification
+
+## Introduction
+
+Anthropic’s Model Context Protocol (MCP) began as a simple STDIO‑based local solution but evolved into a complex, stateful HTTP/SSE system that burdens developers with session management and infrastructure headaches. Maintaining persistent connections conflicts with stateless microservice patterns, leading to scalability and load‑balancing challenges. This specification adopts a minimal, stateless design to avoid these pitfalls.
+
+## Overview
+
+Webtools expose a lightweight, HTTP‑based contract that allows consumers to
+
+* **Discover** capabilities through self‑describing metadata
+* **Validate** inputs via JSON Schema definitions
+
+  * one schema for the request object (`requestSchema`)
+  * one schema for the response object (`responseSchema`)
+* **Execute** actions with optional per‑request configuration
+* **Consume** predictable, strongly‑typed responses
+
+## HTTP Methods
+
+### GET / — Webtool Metadata (latest)
+
+Returns metadata about the **latest** version of the webtool.
+
+```json
+{
+  "name": "webtool_name",
+  "description": "Human‑readable description of what this webtool does",
+  "version": "2.1.0",
+  "actions": [
+    {
+      "name": "action_name",
+      "description": "What this action does",
+      "requestSchema": { /* JSON Schema for request */ },
+      "responseSchema": { /* JSON Schema for response */ }
+    }
+  ],
+  "configSchema": { /* JSON Schema for configuration */ },
+  "defaultConfig": { /* Default configuration values */ }
+}
+```
+
+### GET /{version} — Webtool Metadata (specific version)
+
+Returns metadata **for the specified semantic version**. Use this to fetch historical versions or pin a client to a stable release.
+
+```http
+GET /1.0.0
+```
+
+```json
+{
+  "name": "weather",
+  "description": "Provides weather information",
+  "version": "1.0.0",
+  "actions": [ /* …as above… */ ],
+  "configSchema": { /* … */ },
+  "defaultConfig": { /* … */ }
+}
+```
+
+> **Note** : If the version is not found, the endpoint should return `404 Not Found` with an error envelope identical to the standard error response.
+
+### POST / — Webtool Execution / — Webtool Execution
+
+```json
+{
+  "session_id": "unique‑session‑identifier",
+  "action": "action_name",
+  "config": { /* Optional configuration object */ },
+  "request": { /* Required data matching requestSchema */ }
+}
+```
+
+#### Response Examples
+
+##### Successful Response
+
+```json
+{
+  "status": "ok",
+  "data": { /* Action‑specific result */ },
+  "meta": {
+    "duration_ms": 142,
+    "tool": "weather",
+    "action": "get_current",
+    "trace_id": "8a0b5e92‑3c3d‑4ad3‑9b6e‑4f1a8f5e9c2f"
+  }
+}
+```
+
+##### Error Response
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "INVALID_INPUT",
+    "message": "Validation failed for field 'location'"
+  },
+  "meta": {
+    "duration_ms": 3,
+    "trace_id": "3351c7e5‑d9c7‑4a4d‑b1cf‑8467e31d02a7"
+  }
+}
+```
+
+## Integration Guides
+
+### Using Webtools with the **Vercel AI SDK**
+
+The Vercel AI SDK supports OpenAI‑style *tool calling* out‑of‑the‑box.
+
+#### 1 – Fetch Metadata at Build Time
+
+```ts
+// lib/tools/weather.ts
+import type { Tool } from "ai";
+
+export async function getWeatherTool(): Promise<Tool> {
+  const res = await fetch("/api/webtools/weather");
+  const meta = await res.json();
+  return {
+    name: meta.name,
+    description: meta.description,
+    parameters: meta.actions[0].requestSchema, // <-- uses requestSchema
+    execute: async (args) => {
+      const exec = await fetch("/api/webtools/weather", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          session_id: crypto.randomUUID(),
+          action: args.action,
+          request: args
+        })
+      });
+      return (await exec.json()).data; // unwrap the envelope
+    }
+  };
+}
+```
+
+#### 2 – Create a Tool Caller
+
+```ts
+import { createToolCaller } from "ai/tool-caller";
+import OpenAI from "@ai-sdk/openai";
+import { getWeatherTool } from "@/lib/tools/weather";
+
+const toolCaller = createToolCaller([await getWeatherTool()]);
+
+export async function chat(messages) {
+  const llm = new OpenAI();
+  const modelResponse = await llm.chat({ messages, tools: toolCaller.tools });
+  const final = await toolCaller.call(modelResponse);
+  return final;
+}
+```
+
+> **Tip :** The AI SDK automatically translates `requestSchema` into the function‑calling format the model expects.
+
+### Using Webtools with **LangChain**
+
+LangChain’s `StructuredTool` helper lets you wrap a webtool with schema metadata so agents can invoke it.
+
+```python
+from langchain_core.tools import StructuredTool
+import requests, uuid
+
+WEATHER_ENDPOINT = "https://api.example.com/webtools/weather"
+
+def run_get_current(location: str, units: str = "metric"):
+    body = {
+        "session_id": str(uuid.uuid4()),
+        "action": "get_current",
+        "request": {"location": location},
+        "config": {"units": units}
+    }
+    return requests.post(WEATHER_ENDPOINT, json=body, timeout=10).json()
+
+weather_tool = StructuredTool.from_function(
+    func=run_get_current,
+    name="get_current_weather",
+    description="Return the current weather for a given location via the Weather webtool",
+    schema={
+        "type": "object",
+        "properties": {
+            "location": {"type": "string"},
+            "units": {"type": "string", "enum": ["metric", "imperial"], "default": "metric"}
+        },
+        "required": ["location"]
+    }
+)
+```
+
+Then add `weather_tool` to any LCEL runnable or agent:
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain.agents import AgentExecutor, create_openai_functions_agent
+
+llm = ChatOpenAI(model_name="gpt-4o")
+agent = create_openai_functions_agent(llm, tools=[weather_tool])
+executor = AgentExecutor(agent=agent, tools=[weather_tool])
+
+result = executor.invoke("Should I take an umbrella to Paris today?")
+print(result)
+```
+
+## Error Handling & Best Practices
+
+* Validate client input against each action’s `requestSchema` before issuing a POST.
+* For recoverable failures (4xx), return `status: "error"` with codes such as `INVALID_INPUT`, `NOT_FOUND`, or `RATE_LIMIT`.
+* For unrecoverable server errors (5xx), set code `INTERNAL_ERROR` and avoid leaking internals.
+* Always include a deterministic `trace_id` (UUID) in responses to aid tracing.
+* Use standard HTTP status codes alongside the JSON response for broad compatibility.
+
+---
+
+**Version:** 2025‑06‑30
