@@ -1,4 +1,439 @@
-# Webtools Interface Specification
+# Anthropic MCP Server Template for Serverless Environments
+
+This repository provides a template for developing Stateless Streamable HTTP MCP servers using environments like Supabase Edge Functions and Cloudflare Workers.
+
+We will implement a subset of the Model Context Protocol (MCP) features, focusing on the stateless HTTP request/response model. The SSE (Server-Sent Events) and stdio parts of the protocol are intentionally omitted to ensure compatibility with serverless runtimes.
+
+This document provides example JSON-RPC messages for the supported MCP commands.
+
+# Example JSON-RPC Messages for Anthropic MCP (Stateless HTTP Mode)
+
+Below are example JSON-RPC 2.0 request and response objects for each relevant Model Context Protocol (MCP) command in stateless HTTP mode. Each example shows a complete JSON structure with realistic field values, based on the MCP specification. (All streaming or SSE-based fields are omitted, as these examples assume a non-streaming HTTP interaction.)
+
+## initialize
+
+**Description:** The client begins a session by sending an `initialize` request with its supported protocol version, capabilities, and client info. The server replies with its own protocol version (which may be negotiated), supported server capabilities (e.g. logging, prompts, resources, tools), server info, and any optional instructions.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2025-03-26",
+    "capabilities": {
+      "roots": {
+        "listChanged": true
+      },
+      "sampling": {}
+    },
+    "clientInfo": {
+      "name": "ExampleClient",
+      "version": "1.0.0"
+    }
+  }
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": "2025-03-26",
+    "capabilities": {
+      "logging": {},
+      "prompts": {
+        "listChanged": true
+      },
+      "resources": {
+        "subscribe": true,
+        "listChanged": true
+      },
+      "tools": {
+        "listChanged": true
+      }
+    },
+    "serverInfo": {
+      "name": "ExampleServer",
+      "version": "1.0.0"
+    },
+    "instructions": "Optional instructions for the client"
+  }
+}
+```
+
+
+
+## initialized (notification)
+
+**Description:** After the server responds to `initialize`, the client sends an `initialized` notification to signal that it is ready for normal operations. This is a JSON-RPC notification (no `id` field and no response expected).
+
+**Notification:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/initialized"
+}
+```
+
+
+
+## ping
+
+**Description:** Either party can send a `ping` request at any time to check connectivity. The `ping` request has no parameters, and the receiver must promptly return an empty result object if still alive.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "123",
+  "method": "ping"
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "123",
+  "result": {}
+}
+```
+
+
+
+## resources/list
+
+**Description:** The client requests a list of available resources (files, data, etc.) from the server. The `resources/list` request may include an optional `cursor` for pagination. The response contains an array of resource descriptors (each with fields like `uri`, `name`, `description`, `mimeType`, etc.) and may include a `nextCursor` token if more results are available.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/list",
+  "params": {
+    "cursor": "optional-cursor-value"
+  }
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "resources": [
+      {
+        "uri": "file:///project/src/main.rs",
+        "name": "main.rs",
+        "description": "Primary application entry point",
+        "mimeType": "text/x-rust"
+      }
+    ],
+    "nextCursor": "next-page-cursor"
+  }
+}
+```
+
+
+
+## resources/read
+
+**Description:** The client retrieves the contents of a specific resource by sending `resources/read` with the resource's URI. The server's response includes a `contents` array with the resource data. If the resource is text-based, it appears under a `text` field (with an associated MIME type); for binary data, a `blob` (base64 string) would be used instead.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "resources/read",
+  "params": {
+    "uri": "file:///project/src/main.rs"
+  }
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "contents": [
+      {
+        "uri": "file:///project/src/main.rs",
+        "mimeType": "text/x-rust",
+        "text": "fn main() {\n    println!(\"Hello world!\");\n}"
+      }
+    ]
+  }
+}
+```
+
+
+
+## resources/templates/list
+
+**Description:** The client can query available *resource templates* (parameterized resource URIs) by sending `resources/templates/list`. The response provides a list of resource template definitions, each with a `uriTemplate` (often containing placeholders), a human-readable `name` and `description`, and an optional `mimeType` indicating the type of resource produced.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "resources/templates/list"
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "resourceTemplates": [
+      {
+        "uriTemplate": "file:///{path}",
+        "name": "Project Files",
+        "description": "Access files in the project directory",
+        "mimeType": "application/octet-stream"
+      }
+    ]
+  }
+}
+```
+
+
+
+## prompts/list
+
+**Description:** The client requests a list of available prompt templates by sending `prompts/list`. This may also support pagination via a `cursor`. The server responds with an array of prompt definitions, where each prompt has a unique `name`, a `description` of what it does, and an optional list of expected `arguments` (each argument with a name, description, and whether it's required). A `nextCursor` may be provided if the list is paginated.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "prompts/list",
+  "params": {
+    "cursor": "optional-cursor-value"
+  }
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "prompts": [
+      {
+        "name": "code_review",
+        "description": "Asks the LLM to analyze code quality and suggest improvements",
+        "arguments": [
+          {
+            "name": "code",
+            "description": "The code to review",
+            "required": true
+          }
+        ]
+      }
+    ],
+    "nextCursor": "next-page-cursor"
+  }
+}
+```
+
+
+
+## prompts/get
+
+**Description:** To fetch the content of a specific prompt template (possibly filling in arguments), the client sends `prompts/get` with the prompt's `name` and an `arguments` object providing any required values. The server returns the resolved prompt: typically a `description` and a sequence of `messages` that make up the prompt. Each message has a `role` (e.g. "user" or "assistant") and `content` which could be text or other supported content types.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "prompts/get",
+  "params": {
+    "name": "code_review",
+    "arguments": {
+      "code": "def hello():\n    print('world')"
+    }
+  }
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "description": "Code review prompt",
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "type": "text",
+          "text": "Please review this Python code:\n def hello():\n    print('world')"
+        }
+      }
+    ]
+  }
+}
+```
+
+
+
+## tools/list
+
+**Description:** The client sends `tools/list` to get the list of tools (functions/actions) the server provides. The response includes an array of tool definitions. Each tool has a `name`, a `description` of its functionality, and an `inputSchema` (a JSON Schema object) describing the expected parameters for that tool. The example below shows one tool with a required `location` parameter. A `nextCursor` may appear if the list is paginated.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/list",
+  "params": {
+    "cursor": "optional-cursor-value"
+  }
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      {
+        "name": "get_weather",
+        "description": "Get current weather information for a location",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "City name or zip code"
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    ],
+    "nextCursor": "next-page-cursor"
+  }
+}
+```
+
+
+
+## tools/call
+
+**Description:** To execute a specific tool, the client sends a `tools/call` request with the tool's `name` and an `arguments` object providing the needed inputs. The server will run the tool and return a result. The result includes a `content` array (which may contain text or other content types, depending on what the tool returns) and an `isError` boolean indicating whether the tool succeeded. In this example, the tool returns a text result (weather information) and `isError: false` to show success.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "get_weather",
+    "arguments": {
+      "location": "New York"
+    }
+  }
+}
+```
+
+
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Current weather in New York:\n Temperature: 72°F\n Conditions: Partly cloudy"
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
+
+
+## notifications/cancelled (notification)
+
+**Description:** If either side needs to cancel an in-progress request (e.g. due to a timeout or user action), it sends a `notifications/cancelled` notification. This one-way message includes the `requestId` of the original request to be aborted and an optional `reason` string. The receiver should stop work on that request but does not send any response to the notification.
+
+**Notification:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/cancelled",
+  "params": {
+    "requestId": "123",
+    "reason": "User requested cancellation"
+  }
+}
+```
+
+
+
+Each JSON example above illustrates the structure and fields defined by the MCP specification for stateless HTTP usage, covering the full request/response cycle (or one-way notification) for that command. These messages can be sent over an HTTP-based JSON-RPC connection to manage the model's context and actions without using server-sent events or streaming protocols. All field names and nesting conform to the MCP spec, ensuring interoperability between MCP clients and servers.
+
 
 ## Introduction
 
@@ -31,7 +466,7 @@ After reviewing the schemas and metadata, users may choose to lock-in a specific
 
 ## HTTP Methods
 
-### GET / — Webtool Metadata (latest)
+### GET {webtoolUrl}/ — Webtool Metadata (latest)
 
 Returns metadata about the **latest** version of the webtool.
 
@@ -53,7 +488,7 @@ Returns metadata about the **latest** version of the webtool.
 }
 ```
 
-### GET /{version} — Webtool Metadata (specific version)
+### GET {webtoolUrl}/{version} — Webtool Metadata (specific version)
 
 Returns metadata **for the specified semantic version**. Use this to fetch historical versions or pin a client to a stable release. The `version` parameter is optional; if omitted, the server SHOULD default to the latest version.
 
@@ -74,7 +509,7 @@ GET /1.0.0
 
 > **Note**: If the version is not found, the endpoint should return `404 Not Found` with an error envelope identical to the standard error response.
 
-### POST / — Webtool Execution
+### POST {webtoolUrl}/ — Webtool Execution
 
 ```json
 {
